@@ -4,8 +4,6 @@ const bcrypt = require('bcrypt');
 var CryptoJS = require("crypto-js");
 const { Client } = require('pg');
 
-const SESSION_EXPIRATION_TIME = '10 minutes'
-
 const app = express();
 app.use(bodyParser.json());
 
@@ -63,14 +61,6 @@ app.post('/signin', async (req, res) => {
 })
 
 
-function CheckKey(key, callback) {
-  client.query("SELECT \"User\".id FROM \"Session\" " +
-               " INNER JOIN \"User\" ON \"User\".id = \"Session\".user_id " + 
-               " WHERE \"Session\".key = $1 AND \"Session\".creation_date + interval $2 >= now()",
-               [key, SESSION_EXPIRATION_TIME], function (err, result) {
-    return callback(err, result);
-  });
-}
 
 app.get('/getCategories', async (req, res) => {
   try{
@@ -129,121 +119,64 @@ app.get('/getProducts', async (req, res) => {
   }
 })
 
-//#################################################################################################
 
-//Test Promise
-app.get("/testPromise", (req, res) => {
-  var login = req.body.login;
-
-  return new Promise((resolve, reject) => {
-    client.query('SELECT * FROM \"User\" WHERE login = $1', [login],  (err, result) => {
-      if(err)
-       reject(err);
-      else if(result.rows.length == 0) 
-        reject("No data");
-      else 
-        resolve(result.rows[0].id);
-    })
-  })
-  .then(value => {
-    return new Promise((resolve, reject) => { // (*)
-      client.query('SELECT * FROM \"Favorite\" WHERE id = $1', [value], (err, result) => {
-        if(err) 
-          reject(err);
-        else 
-          resolve(result.rows);
-      });
-    });
-  })
-  .then(value => {
-    res.send(value);
-  })
-  .catch(err => {
-    res.send(err);
+function CheckKey(key, callback) {
+  client.query("SELECT \"User\".id FROM \"Session\" " +
+               " INNER JOIN \"User\" ON \"User\".id = \"Session\".user_id " + 
+               " WHERE \"Session\".key = $1 AND \"Session\".creation_date + interval '10 minutes' >= now()",
+               [key.toString()], function (err, result) {
+    return callback(err, result);
   });
-})
+}
 
+async function ChceckKey(key) {
+  var userId = await client.query("SELECT \"User\".id FROM \"Session\" " +
+               " INNER JOIN \"User\" ON \"User\".id = \"Session\".user_id " + 
+               " WHERE \"Session\".key = $1 AND \"Session\".creation_date + interval '10 minutes' >= now()",
+               [key.toString()]);
+  return userId;
+}
 
-//Test Async/Await
-app.get("/testAsync", async (req, res) => {
-  var login = req.body.login;
+app.post('/addToFavorites', async(req, res) =>{
   try{
-    var getUser = await client.query('SELECT * FROM \"User\" WHERE login = $1', [login])
-    if(getUser.rows.length == 0){
-      throw "No data was found";
-    }
-    var getFavorite = await client.query('SELECT * FROM \"Favorite\" WHERE id = $1', [getUser.rows[0].id]) 
-    res.send(getFavorite.rows);
-  }catch(error){
-    res.send(error)
+  var product_id = req.body.product_id;
+  var key = req.body.session_key;  
+  var userId = await ChceckKey(key.toString());
+
+  if(userId.err)
+    throw err;
+  else if(userId.rows.length == 0)
+    throw "Login first"
+
+  await client.query("INSERT INTO \"Favorite\" (user_id, product_id) VALUES ($1, $2)", [userId.rows[0].id, product_id]);
+  res.send("Inserted");
+  }catch(err){
+    res.send(err);
   }
 })
 
- //################################################################################################
 
-app.post('/addToFavorites', function(req, res){
-  var product_id = req.body.product_id;
+app.get('/getFavorites', async(req, res) => {
+  try{
   var key = req.body.session_key;
+  var userId = await ChceckKey(key.toString());
 
-  CheckKey(key.toString(), function(err, result){
-    if(err){
-      res.send(err);
-    }else if(result.rows.length == 0){
-      res.status(401).send("Login first");
-    }else{
-      client.query("INSERT INTO \"Favorite\" (user_id, product_id) VALUES ($1, $2)", [result.rows[0].id, product_id], function(err, result){
-        if(err)
-          throw err;
-        res.status(201).send("Inserted");
-      });
-    }
-  });
-})
+  if(userId.err)
+    throw err;
+  else if(userId.rows.length == 0)
+    throw "Login first"
+  
+  var listOfFavorites = await client.query("SELECT \"Product\".id, \"Product\".name" +
+                                      " FROM \"Favorite\" "+
+                                      " INNER JOIN \"Product\" ON \"Product\".id = \"Favorite\".product_id" +
+                                      " INNER JOIN \"User\" ON \"User\".id = \"Favorite\".user_id "+
+                                      " WHERE \"User\".id = $1",[userId.rows[0].id]);
 
-// app.post('/addToFavorites', async (req, res) => {
-//   try{
-//     var product_id = req.body.product_id;
-//     var key = req.body.session_key;    
-//     if(!key || !product_id){
-//       throw "Wrong data";
-//     }
-//     var checkKey = await CheckKey(key.toString());
-//     console.log(checkKey);
-//     if(checkKey.rows.length == 0){
-//       throw "Login first";
-//     } else if(checkKey.err){
-//       throw checkKey.err;
-//     }
-//     var user_id = checkKey.rows[0].id;
-//     await client.query("INSERT INTO \"Favorite\" (user_id, product_id) VALUES ($1, $2)", [user_id, product_id]);
+  res.status(200).send(listOfFavorites.rows);
 
-//     res.status(201).send("Inserted");
-//   }catch(error){
-//     res.status(400).send(error);
-//   }
-// })
-
-app.get('/getFavorites', function(req, res){
-  var key = req.body.session_key;
-
-  checkKey(key.toString(), function(err, result){
-    if(err){
-      res.send(err);
-    }else if(result.rows.length == 0){
-      res.send("Login first");
-    }else{
-      client.query("SELECT \"Product\".id, \"Product\".name" +
-                    " FROM \"Favorite\" "+
-                    " INNER JOIN \"Product\" ON \"Product\".id = \"Favorite\".product_id" +
-                    " INNER JOIN \"User\" ON \"User\".id = \"Favorite\".user_id "+
-                    " WHERE \"User\".id = $1",
-                    [result.rows[0].id], function(err, result){
-                      if(err)
-                        throw err;
-                    res.send(result.rows);
-            });
-    }
-  });
+  }catch(error){
+    res.status(400).send(error);
+  }
 })
 
 app.listen(4000, function () {
