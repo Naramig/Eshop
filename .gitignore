@@ -89,3 +89,5 @@ typings/
 
 #Docker
 Dockerfile
+#Config
+config.js

@@ -1,7 +1,5 @@
 const express = require('express');
 const bodyParser = require('body-parser');
-const bcrypt = require('bcrypt');
-const axios = require("axios");
 const { Client } = require('pg');
 const rp = require('request-promise');
 
@@ -9,11 +7,10 @@ const authUrl = 'http://localhost:8082';
 const app = express();
 app.use(bodyParser.json());
 
-//Connection to DB
-const connectionString = 'postgres://nikolai:Naramig30@localhost:5432/eshop';
-const client = new Client({
-    connectionString: connectionString
-});
+var env = process.env.NODE_ENV || 'development';
+var config = require('./config')[env];
+ 
+const client = new Client(config.database);
 client.connect();
     
 app.post('/signup', (req, res) => {
@@ -178,6 +175,6 @@ var listOfFavorites = await client.query("SELECT \"Product\".id, \"Product\".nam
   }
 })
 
-app.listen(8081, function () {
-    console.log('Server is running.. on Port 8081');
+app.listen(config.server.port, function () {
+    console.log('Server is running.. on Port '+ config.server.port);
 });
