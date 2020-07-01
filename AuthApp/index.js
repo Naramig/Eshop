@@ -7,11 +7,11 @@ const CryptoJS = require("crypto-js");
 const app = express()
 app.use(bodyParser.json());
 
+var env = process.env.NODE_ENV || 'development';
+var config = require('./config')[env];
+
 //Connection to DB
-const connectionString = 'postgres://nikolai:Naramig30@localhost:5432/eshop';
-const client = new Client({
-    connectionString: connectionString
-});
+const client = new Client(config.database);
 client.connect();
 
 async function CheckKey(key) {
@@ -80,7 +80,7 @@ app.post('/checkSession', async (req, res) => {
   }
 })
 
-app.listen(8082, () =>{
-    console.log("Server is running on port 8082");
+app.listen(config.server.port, () =>{
+    console.log("Server is running on port "+ config.server.port);
 })
 
