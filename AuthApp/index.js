@@ -3,6 +3,20 @@ const { Client } = require('pg');
 const bodyParser = require('body-parser');
 const bcrypt = require('bcrypt');
 const CryptoJS = require("crypto-js");
+const grpc = require('grpc');
+const protoLoader = require('@grpc/proto-loader');
+
+//gRPC Settings
+var PROTO_PATH = __dirname + '/test.proto';
+var packageDefinition = protoLoader.loadSync(
+  PROTO_PATH,
+  {keepCase: true,
+   longs: String,
+   enums: String,
+   defaults: true,
+   oneofs: true
+  });
+var proto = grpc.loadPackageDefinition(packageDefinition);
 
 const app = express()
 app.use(bodyParser.json());
@@ -22,10 +36,26 @@ async function CheckKey(key) {
   return userId;
 }
 
-app.post('/signup', async (req, res) => {
+
+async function CheckSession(call, callback) {
   try{
-    var login=req.body.login;
-    var password=req.body.password;
+    var key = call.request.session_key;
+    console.log("Here");
+    var userId = await CheckKey(key.toString());
+    if(userId.err)
+      throw err;
+    else if(userId.rows.length == 0)
+      throw new Error('Session expired or does not exist');
+    callback(null, {user_id: userId.rows[0].id});
+  }catch(err){
+    callback(err, {message: ''});
+  }
+}
+
+async function Signup(call, callback) {
+  try{
+    var login = call.request.login;
+    var password = call.request.password;
     if(!login || !password){
       throw new Error('Provide login and password correctly');
     }
@@ -35,16 +65,16 @@ app.post('/signup', async (req, res) => {
     }
     var passwordHash = await bcrypt.hash(password, 10);
     await client.query("INSERT INTO \"User\" (login, password) values($1, $2)", [login, passwordHash]);
-    res.status(201).send("Inserted");
+    callback(null, {message: 'Inserted'});
   }catch(err){
-    res.status(400).send({error: err.message});
+    callback(err, {message: ''});
   }
-})
+}
 
-app.post('/signin', async (req, res) => {
+async function Signin(call, callback) {
   try{
-    var login=req.body.login;
-    var password=req.body.password;
+    var login = call.request.login;
+    var password = call.request.password;
 
     var userInfo = await client.query("SELECT * FROM \"User\" WHERE login = $1", [login]);
     if( userInfo.rows.length == 0){
@@ -59,28 +89,18 @@ app.post('/signin', async (req, res) => {
     var key128Bits = CryptoJS.PBKDF2("Secret Passphrase", salt, { keySize: 128 / 32});
 
     await client.query("INSERT INTO \"Session\" (key, user_id) values($1, $2)", [key128Bits.toString(), userId]);
-
-    res.status(200).send({session_key: key128Bits.toString()});
+    console.log(key128Bits.toString());
+    callback(null, {session_key: key128Bits.toString()});
   }catch(err){
-    res.status(400).send({error: err.message});
+    callback(err, {message: ''});
   }
-})
+}
 
-app.post('/checkSession', async (req, res) => {
-  try{
-  var key = req.body.key;
-  var userId = await CheckKey(key.toString());
-  if(userId.err)
-    throw err;
-  else if(userId.rows.length == 0)
-    throw new Error('Session expired or does not exist');
-  res.send({id: userId.rows[0].id});
-  }catch(err){
-    res.status(400).send({error: err.message});
-  }
-})
+var server = new grpc.Server();
 
-app.listen(config.server.port, () =>{
-    console.log("Server is running on port "+ config.server.port);
-})
+server.addService(proto.Authentication.service, {signup: Signup, signin: Signin, checkSession: CheckSession});
+server.bind('localhost:' + config.server.port, grpc.ServerCredentials.createInsecure());
+console.log("Server running at port " + config.server.port);
+server.start();
+
 

@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+
+service Authentication {
+  rpc Signup (UserDataRequest) returns (Reply) {}
+  rpc Signin (UserDataRequest) returns (SessionKey) {}
+  rpc CheckSession (SessionKey) returns (UserId) {}
+}
+message UserDataRequest {
+  required string login = 1;
+  required string password = 2;
+}
+message Reply {
+  required string message = 1;
+}
+
+message SessionKey {
+    required string session_key = 1;
+}
+message UserId {
+    required int32 user_id = 1;
+}

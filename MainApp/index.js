@@ -2,58 +2,57 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const { Client } = require('pg');
 const rp = require('request-promise');
+const grpc = require('grpc');
+const protoLoader = require('@grpc/proto-loader');
+const { response } = require('express');
 
-const authUrl = 'http://localhost:8082';
+const authUrl = 'localhost:8082';
+
+//gRPC settings
+var PROTO_PATH = __dirname + '/test.proto';
+var packageDefinition = protoLoader.loadSync(
+  PROTO_PATH,
+  {keepCase: true,
+   longs: String,
+   enums: String,
+   defaults: true,
+   oneofs: true
+  });
+var proto = grpc.loadPackageDefinition(packageDefinition);
+var gRPCClient = new proto.Authentication(authUrl, grpc.credentials.createInsecure());
+
 const app = express();
 app.use(bodyParser.json());
 
 var env = process.env.NODE_ENV || 'development';
 var config = require('./config')[env];
  
+//db connction
 const client = new Client(config.database);
 client.connect();
     
 app.post('/signup', (req, res) => {
     var loginT=req.body.login;
     var passwordT=req.body.password;
-    var options = {
-      method: 'POST',
-      uri: authUrl + '/signup',
-      body: {
-          login: loginT,
-          password: passwordT
-      },
-      json: true
-  };
-  rp(options)
-    .then(function (parsedBody) {
-        res.send(parsedBody);
-    })
-    .catch(function (err) {
-        res.status(err.statusCode).send(err.error);
+    gRPCClient.signup({login: loginT, password: passwordT}, function(err, response) {
+      if(err)
+        res.status(400).send(err.details);
+      else{
+        res.status(200).send(response.message);
+      }
     });
-  
 })
 
 app.post('/signin', (req, res) => {
   var loginT=req.body.login;
   var passwordT=req.body.password;
-  var options = {
-    method: 'POST',
-    uri: authUrl + 'signin',
-    body: {
-        login: loginT,
-        password: passwordT
-    },
-    json: true
-  };
-  rp(options)
-    .then(function (parsedBody) {
-        res.send(parsedBody);
-    })
-    .catch(function (err) {
-      res.status(err.statusCode).send(err.error);
-    });
+  gRPCClient.signin({login: loginT, password: passwordT}, (err, response) => {
+    if(err)
+      res.status(400).send(err.details);
+    else{
+      res.status(200).send({session_key: response.session_key});
+    }
+  });
 })
 
 app.get('/getCategories', async (req, res) => {
@@ -113,66 +112,64 @@ app.get('/getProducts', async (req, res) => {
   }
 })
 
-async function CheckKey(key) {
-  var userId = await client.query("SELECT \"User\".id FROM \"Session\" " +
-               " INNER JOIN \"User\" ON \"User\".id = \"Session\".user_id " + 
-               " WHERE \"Session\".key = $1 AND \"Session\".creation_date + interval '10 minutes' >= now()",
-               [key.toString()]);
-  return userId;
-}
-
 app.post('/addToFavorite', async (req, res) => {
-  try{
-    var product_id = req.body.product_id;
-    var keyT = req.body.session_key;  
-
-    var options = {
-      method: 'POST',
-      uri: authUrl + '/checkSession',
-      body: {
-          key: keyT,
-      },
-      json: true
-  };
-  var userData = await rp(options);
-  if(userData.error){
-    throw new Error(userId.error);
-  }
-  await client.query("INSERT INTO \"Favorite\" (user_id, product_id) VALUES ($1, $2)", [userData.id, product_id]);
-  res.status(200).send("Inserted");
-
-  }catch(err){
-    res.send(err.error);
-  }
+  var product_id = req.body.product_id;
+  var keyT = req.body.session_key;  
+  return new Promise((resolve, reject) => {
+    if(!product_id)
+      reject({details: 'product_id is incorrect'});
+    gRPCClient.checkSession({session_key: keyT}, (err, response) => {
+      if(err){
+        reject(err);
+      }else{
+        resolve(response);
+      }
+    });
+  })
+  .then(value => {
+    return new Promise((resolve, reject) => {
+      client.query("INSERT INTO \"Favorite\" (user_id, product_id) VALUES ($1, $2)", [value.user_id, product_id], (err, result) => {
+        if(err)
+          reject(err);
+        else
+          res.status(200).send({status: 'inserted'});
+      });
+    });
+  })
+  .catch(err => {
+    res.status(400).send({error: err});
+  });  
 })
 
-
-app.get('/getFavorites', async(req, res) => {
-  try{
+app.get('/getFavorites', (req, res) => {
   var keyT = req.body.session_key;
-  var options = {
-    method: 'POST',
-    uri: authUrl + '/checkSession',
-    body: {
-        key: keyT,
-    },
-    json: true
-};
-var userData = await rp(options);
-if(userData.error){
-  throw new Error(userId.error);
-}
-  
-var listOfFavorites = await client.query("SELECT \"Product\".id, \"Product\".name" +
-                                      " FROM \"Favorite\" "+
-                                      " INNER JOIN \"Product\" ON \"Product\".id = \"Favorite\".product_id" +
-                                      " INNER JOIN \"User\" ON \"User\".id = \"Favorite\".user_id "+
-                                      " WHERE \"User\".id = $1",[userData.id]);
 
-  res.status(200).send(listOfFavorites.rows);
-  }catch(err){
-    res.status(400).send(err.message);
-  }
+  return new Promise((resolve, reject) => {
+    gRPCClient.checkSession({session_key: keyT}, (err, response) => {
+      if(err){
+        reject(err);
+      }else{
+        resolve(response);
+      }
+    });
+  })
+  .then(value => {
+    return new Promise((resolve, reject) => {
+      client.query("SELECT \"Product\".id, \"Product\".name" +
+            " FROM \"Favorite\" "+
+            " INNER JOIN \"Product\" ON \"Product\".id = \"Favorite\".product_id" +
+            " INNER JOIN \"User\" ON \"User\".id = \"Favorite\".user_id "+
+            " WHERE \"User\".id = $1",[value.user_id], (err, result) => {
+        if(err)
+          reject(err);
+        else
+          res.status(200).send(result.rows);
+      });
+    });
+  })
+  .catch(err => {
+    res.status(400).send({error: err.details});
+  });  
 })
 
 app.listen(config.server.port, function () {
