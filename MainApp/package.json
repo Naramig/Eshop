@@ -15,7 +15,7 @@
     "express": "^4.17.1",
     "express-session": "^1.17.1",
     "grpc": "^1.24.3",
-    "nodemon": "^2.0.4",
+    "nodemon": "^2.0.20",
     "pg": "^8.2.1",
     "request": "^2.88.2",
     "request-promise": "^4.2.5"
